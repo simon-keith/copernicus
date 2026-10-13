@@ -1,0 +1,156 @@
+[project]
+name = "copernicus"
+version = "0.1.0"
+description = "Copernicus Sentinel imagery: maps, images and phenology detection (mimosa bloom, larch senescence, burned areas)."
+readme = "README.md"
+authors = [
+    { name = "Simon Keith", email = "simon.keith@shippeo.com" }
+]
+# 3.13, not 3.14: geospatial libraries (rasterio, GDAL wheels) lag on new Pythons.
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "matplotlib>=3.11.2",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.15.0",
+    "shapely>=2.2.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+copernicus = "copernicus.cli:app"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.0",
+    "types-shapely>=2.1.0.20260728",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.15,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+# Research notes quote other libraries' examples verbatim: never reformat them.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = [
+    "F",     # Pyflakes - error detection (undefined names, unused imports)
+    "E",     # pycodestyle errors - PEP 8 style violations
+    "W",     # pycodestyle warnings - PEP 8 style warnings
+    "C90",   # mccabe - cyclomatic complexity
+    "B",     # flake8-bugbear - likely bugs and design issues
+    "C4",    # flake8-comprehensions - better list/set/dict comprehensions
+    "SIM",   # flake8-simplify - simplification suggestions
+    "RET",   # flake8-return - return statement best practices
+    "ARG",   # flake8-unused-arguments - unused function arguments
+    "PERF",  # Perflint - performance anti-patterns
+    "FURB",  # refurb - modernize Python code idioms
+    "ERA",   # eradicate - commented-out code detection
+    "I",     # isort - import sorting and organization
+    "UP",    # pyupgrade - modern Python syntax upgrades
+    "N",     # pep8-naming - naming conventions (PEP 8)
+    "D",     # pydocstyle - docstring conventions
+    "ANN",   # flake8-annotations - type annotation coverage
+    "S",     # flake8-bandit - security vulnerabilities
+    "BLE",   # flake8-blind-except - blind exception catching
+    "TRY",   # tryceratops - exception handling anti-patterns
+    "EM",    # flake8-errmsg - exception messages built outside the raise
+    "RSE",   # flake8-raise - raise statement best practices
+    "A",     # flake8-builtins - shadowing Python builtins
+    "FBT",   # flake8-boolean-trap - no positional boolean flags
+    "DTZ",   # flake8-datetimez - timezone-aware datetime usage
+    "PTH",   # flake8-use-pathlib - prefer pathlib over os.path
+    "G",     # flake8-logging-format - logging format best practices
+    "LOG",   # flake8-logging - logging API misuse
+    "T20",   # flake8-print - no print(), the CLI uses typer.echo
+    "PT",    # flake8-pytest-style - pytest style and best practices
+    "PIE",   # flake8-pie - unnecessary code and misc lints
+    "PGH",   # pygrep-hooks - no blanket `type: ignore` or `noqa`
+    "FLY",   # flynt - static string joins to f-strings
+    "SLF",   # flake8-self - no private member access across objects
+    "TID",   # flake8-tidy-imports - no relative imports
+    "TC",    # flake8-type-checking - typing-only imports
+    "INP",   # flake8-no-pep420 - no implicit namespace packages
+    "PYI",   # flake8-pyi - typing best practices
+    "NPY",   # NumPy-specific rules - deprecated and legacy numpy APIs (rasters)
+    "PL",    # Pylint - errors, warnings, refactoring, conventions
+    "RUF",   # Ruff-specific rules - linter-specific checks
+]
+ignore = [
+    "D104",   # pydocstyle - no docstring required for public packages
+    "D203",   # no-blank-line-before-class (conflicts with D211)
+    "D213",   # multi-line-summary-second-line (conflicts with D212)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",    # assert - allow assert statements in tests
+    "S105",    # hardcoded-password-string - fake OAuth secrets in tests
+    "S106",    # hardcoded-password-func-arg - fake OAuth secrets in tests
+    "ARG001",  # flake8-unused-arguments - allow unused arguments (fixtures)
+    "ANN",     # flake8-annotations - no type annotations required in tests
+    "D",       # pydocstyle - no docstrings required in tests
+    "PLR2004", # magic-value-comparison - literal expectations are the point of a test
+    "SLF001",  # private-member-access - tests may poke at internals
+]
+"src/copernicus/cli.py" = [
+    "PLR0913", # too-many-arguments - typer maps each CLI option to a parameter
+    "PLR0917", # too-many-positional-arguments - same reason
+    "FBT001",  # boolean-typed-positional-argument - typer flags are CLI options
+    "FBT002",  # boolean-default-value-positional-argument - same reason
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic and typer read annotations at runtime: never move their imports.
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "pydantic_settings.BaseSettings",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["src", "tests"]
+# importlib mode keeps sys.path untouched; doctests keep docstring examples honest.
+addopts = ["--import-mode=importlib", "--doctest-modules"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+strict = true
+exclude_gitignore = true
+warn_unreachable = true
+# matplotlib.dates locators and formatters ship without annotations.
+untyped_calls_exclude = ["matplotlib.dates"]
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+    "possibly-undefined",
+]
+
+[[tool.mypy.overrides]]
+# Tests are not annotated (ruff ANN is off for them), but their bodies are checked.
+module = ["tests", "tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

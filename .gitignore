@@ -218,3 +218,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Project specific ---
+# Secrets: CDSE OAuth client (CDSE_CLIENT_ID / CDSE_CLIENT_SECRET)
+.env.*
+!.env.example
+
+# Local data: downloaded rasters, rendered images, caches, scratch files
+data/
+local/
+tmp/
+*.tif
+*.tiff
+*.jp2
+*.SAFE/
