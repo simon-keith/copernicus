@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 from typing import Self
+from typing import assert_never
 
 import httpx
 from pydantic import BaseModel
@@ -52,6 +53,25 @@ class ImageFormat(StrEnum):
     PNG = "image/png"
     JPEG = "image/jpeg"
     TIFF = "image/tiff"
+
+    @property
+    def extension(self) -> str:
+        """File name extension, without the dot.
+
+        Examples
+        --------
+        >>> ImageFormat.TIFF.extension
+        'tif'
+        """
+        match self:
+            case ImageFormat.PNG:
+                return "png"
+            case ImageFormat.JPEG:
+                return "jpg"
+            case ImageFormat.TIFF:
+                return "tif"
+            case _:
+                assert_never(self)
 
 
 class ProcessError(Exception):

@@ -2,6 +2,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from copernicus.bdforet import FORMATIONS
 from copernicus.bdforet import BdForetClient
 from copernicus.bdforet import ForestType
 from copernicus.geo import BBox
@@ -66,3 +67,10 @@ class TestStands:
 
         with mock_client(handler) as http:
             assert BdForetClient(http).stands(BBOX) == []
+
+
+class TestFormations:
+    def test_every_forest_type_has_its_own_code(self):
+        assert set(FORMATIONS) == set(ForestType)
+        codes = [forest.code_tfv for forest in ForestType]
+        assert len(set(codes)) == len(codes)

@@ -2,7 +2,9 @@ import csv
 import math
 from datetime import date
 
+from copernicus.geo import DayRange
 from copernicus.series import difference
+from copernicus.series import rise
 from copernicus.series import to_series
 from copernicus.series import usable
 from copernicus.series import write_csv
@@ -36,3 +38,15 @@ class TestSeries:
         pine = to_series([day(5, 1000, 0.7), day(7, 100, 0.7), day(12, 1000, 0.7)])
         delta = difference(larch, pine, min_coverage=0.3)
         assert [(p.day.day, round(p.values["NDVI"], 2)) for p in delta] == [(5, 0.1)]
+
+    def test_rise_is_relative_to_the_base_days(self):
+        points = to_series([day(1, 1000, 0.70), day(3, 1000, 0.72), day(20, 900, 0.50)])
+        base = DayRange(start=date(2025, 10, 1), end=date(2025, 10, 5))
+        result = rise(points, base)
+        assert result is not None
+        assert [round(p.values["NDVI"], 2) for p in result] == [-0.01, 0.01, -0.21]
+
+    def test_no_rise_without_a_base_day(self):
+        points = to_series([day(20, 900, 0.50)])
+        base = DayRange(start=date(2025, 10, 1), end=date(2025, 10, 5))
+        assert rise(points, base) is None

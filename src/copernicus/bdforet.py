@@ -7,9 +7,10 @@ The service returns 5000 features per page at most.
 """
 
 from collections.abc import Iterator
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
-from typing import assert_never
 
 import httpx
 from pydantic import BaseModel
@@ -24,7 +25,7 @@ PAGE_SIZE: Final = 5000
 
 
 class ForestType(StrEnum):
-    """Closed pure stands used by the larch use case."""
+    """Closed stands compared by the larch and mimosa use cases."""
 
     LARCH = "larch"
     """Forêt fermée de mélèze pur."""
@@ -32,6 +33,13 @@ class ForestType(StrEnum):
     """Pin à crochets ou pin cembro: evergreen, same altitude belt as larch."""
     SCOTS_PINE = "scots_pine"
     FIR_SPRUCE = "fir_spruce"
+    OTHER_BROADLEAF = "other_broadleaf"
+    """Forêt fermée d'un autre feuillu pur: mostly mimosa in the Tanneron (its
+    red/green ratio peaks in February, 2025 and 2026), not necessarily elsewhere."""
+    EVERGREEN_OAK = "evergreen_oak"
+    """Chênes sempervirents (holm and cork oak): evergreen control on the coast."""
+    MIXED_BROADLEAF = "mixed_broadleaf"
+    """Mélange de feuillus: deciduous oak and chestnut, bare from December."""
 
     @property
     def code_tfv(self) -> str:
@@ -42,17 +50,7 @@ class ForestType(StrEnum):
         >>> ForestType.LARCH.code_tfv
         'FF2-63-63'
         """
-        match self:
-            case ForestType.LARCH:
-                return "FF2-63-63"
-            case ForestType.MOUNTAIN_PINE:
-                return "FF2G58-58"
-            case ForestType.SCOTS_PINE:
-                return "FF2-52-52"
-            case ForestType.FIR_SPRUCE:
-                return "FF2G61-61"
-            case _:
-                assert_never(self)
+        return FORMATIONS[self].code_tfv
 
     @property
     def french(self) -> str:
@@ -63,17 +61,7 @@ class ForestType(StrEnum):
         >>> ForestType.MOUNTAIN_PINE.french
         'pin à crochets/cembro'
         """
-        match self:
-            case ForestType.LARCH:
-                return "mélèze"
-            case ForestType.MOUNTAIN_PINE:
-                return "pin à crochets/cembro"
-            case ForestType.SCOTS_PINE:
-                return "pin sylvestre"
-            case ForestType.FIR_SPRUCE:
-                return "sapin/épicéa"
-            case _:
-                assert_never(self)
+        return FORMATIONS[self].french
 
     @property
     def label(self) -> str:
@@ -85,6 +73,26 @@ class ForestType(StrEnum):
         'mountain pine'
         """
         return self.value.replace("_", " ")
+
+
+@dataclass(frozen=True, slots=True)
+class Formation:
+    """A BD Forêt formation: its code and its French name."""
+
+    code_tfv: str
+    french: str
+
+
+FORMATIONS: Final[Mapping[ForestType, Formation]] = {
+    ForestType.LARCH: Formation("FF2-63-63", "mélèze"),
+    ForestType.MOUNTAIN_PINE: Formation("FF2G58-58", "pin à crochets/cembro"),
+    ForestType.SCOTS_PINE: Formation("FF2-52-52", "pin sylvestre"),
+    ForestType.FIR_SPRUCE: Formation("FF2G61-61", "sapin/épicéa"),
+    ForestType.OTHER_BROADLEAF: Formation("FF1-49-49", "autre feuillu pur"),
+    ForestType.EVERGREEN_OAK: Formation("FF1G06-06", "chênes sempervirents"),
+    ForestType.MIXED_BROADLEAF: Formation("FF1-00-00", "mélange de feuillus"),
+}
+"""Every forest type's formation (a test checks that none is missing)."""
 
 
 class Stand(BaseModel):

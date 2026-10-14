@@ -1,14 +1,18 @@
 """``copernicus``: the project's command line."""
 
-import dataclasses
 import math
+from dataclasses import dataclass
 from datetime import date
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 from typing import Annotated
+from typing import assert_never
 
 import httpx
+import numpy as np
 import typer
+from numpy.typing import NDArray
 from pydantic import TypeAdapter
 
 from copernicus.auth import CdseSettings
@@ -22,21 +26,33 @@ from copernicus.chart import Panel
 from copernicus.chart import plot_panels
 from copernicus.evalscripts import Evalscript
 from copernicus.evalscripts import ScriptKind
+from copernicus.frames import LARCH_LEGEND
+from copernicus.frames import MIMOSA_LEGEND
 from copernicus.frames import Frame
+from copernicus.frames import Sheet
+from copernicus.frames import french_date
+from copernicus.frames import overlay
 from copernicus.frames import plot_sheet
 from copernicus.frames import read_png
-from copernicus.frames import shares
 from copernicus.frames import stand_mask
 from copernicus.geo import BBox
 from copernicus.geo import DayRange
 from copernicus.geometry import Area
 from copernicus.geometry import stand_area
+from copernicus.phenology import ONSET_RISE
+from copernicus.phenology import Phenology
+from copernicus.pixels import SMOOTHING
+from copernicus.pixels import Change
+from copernicus.pixels import Composite
+from copernicus.pixels import Index
+from copernicus.pixels import detected_shares
 from copernicus.process import DataInput
 from copernicus.process import ImageFormat
 from copernicus.process import ProcessClient
 from copernicus.process import RenderRequest
 from copernicus.series import SeriesPoint
 from copernicus.series import difference
+from copernicus.series import rise
 from copernicus.series import to_series
 from copernicus.series import usable
 from copernicus.series import write_csv
@@ -215,9 +231,17 @@ ForestOpt = Annotated[
     typer.Option(
         "--forest",
         "-f",
-        help="BD Forêt stand type (repeat). Default: mountain pine and larch.",
+        help="BD Forêt stand type (repeat). Default: the site's control and target.",
     ),
 ]
+
+
+def _phenology(site: Site) -> Phenology:
+    """Return the stand-level signal of a site; fire sites have none."""
+    if site.info.phenology is None:
+        msg = f"{site} has no stand-level signal: use the render command"
+        raise typer.BadParameter(msg, param_hint="SITE")
+    return site.info.phenology
 
 
 @app.command()
@@ -255,16 +279,18 @@ def series(
         typer.Option(help="Field observation to shade: FROM..TO=label."),
     ] = None,
 ) -> None:
-    """Daily NDVI/PSRI medians per forest type (Statistical API), CSV + chart.
+    """Daily index medians per forest type (Statistical API), CSV + chart.
 
-    Needs CDSE_CLIENT_ID and CDSE_CLIENT_SECRET (environment or .env).
+    Larch sites chart NDVI and PSRI, mimosa sites NDVI and RG, plus the target
+    minus the first other stand type. Needs CDSE_CLIENT_ID and CDSE_CLIENT_SECRET.
     """
+    phenology = _phenology(site)
     days = _parse_period(period)
     mark = None
     if observed is not None:
         dates, _, note = observed.partition("=")
         mark = (_parse_period(dates), note or "observed")
-    chosen = forests or [ForestType.MOUNTAIN_PINE, ForestType.LARCH]
+    chosen = forests or [phenology.control, phenology.target]
     found = _stands(site, refresh=False)
     stem = f"{site.value}_{days.start}_{days.end}"
     results: dict[ForestType, list[SeriesPoint]] = {}
@@ -280,7 +306,7 @@ def series(
             request = StatisticsRequest(
                 area=area,
                 period=days,
-                evalscript=Evalscript.SENESCENCE_STATS.source(),
+                evalscript=phenology.statistics.source(),
                 resolution_m=resolution,
             )
             points = to_series(_daily(client, request, site, forest))
@@ -299,22 +325,14 @@ def series(
                 Line(f, f.label, usable(p, min_coverage)) for f, p in results.items()
             ],
         )
-        for band in ("NDVI", "PSRI")
+        for band in phenology.bands
     ]
-    larch = results.get(ForestType.LARCH)
-    control = next((f for f in results if f is not ForestType.LARCH), None)
-    if larch is not None and control is not None:
-        delta = difference(larch, results[control], min_coverage)
-        delta_csv = DATA_DIR / "series" / f"{stem}_larch_minus_{control}.csv"
-        write_csv(delta, delta_csv)
-        typer.echo(f"larch - {control.label}: {len(delta)} days -> {delta_csv}")
+    target = results.get(phenology.target)
+    control = next((f for f in results if f is not phenology.target), None)
+    if target is not None and control is not None:
+        delta = difference(target, results[control], min_coverage)
         panels.append(
-            Panel(
-                band="PSRI",
-                ylabel="ΔPSRI",
-                lines=[Line(ForestType.LARCH, f"larch - {control.label}", delta)],
-                zero_line=True,
-            )
+            _delta_panel(phenology, delta, control, phenology.base(days.end), stem)
         )
     chart = DATA_DIR / "series" / f"{stem}.png"
     plot_panels(
@@ -327,9 +345,53 @@ def series(
     typer.echo(f"chart -> {chart}")
 
 
+def _delta_panel(
+    phenology: Phenology,
+    delta: list[SeriesPoint],
+    control: ForestType,
+    base: DayRange,
+    stem: str,
+) -> Panel:
+    """Write the target-minus-control CSVs, print the season's days, chart it.
+
+    With the base period inside the series, the panel shows the rise above the
+    base level and the start threshold; otherwise the plain difference.
+    """
+    name = f"{phenology.target}_minus_{control}"
+    delta_csv = DATA_DIR / "series" / f"{stem}_{name}.csv"
+    write_csv(delta, delta_csv)
+    label = f"{phenology.target.label} - {control.label}"
+    typer.echo(f"{label}: {len(delta)} days -> {delta_csv}")
+    band = phenology.delta_band
+    risen = rise(delta, base)
+    if risen is None:
+        typer.echo(f"no visible day from {base.start} to {base.end}: no rise")
+        return Panel(
+            band=band,
+            ylabel=f"Δ{band}",
+            lines=[Line(phenology.target, label, delta)],
+            zero_line=True,
+        )
+    rise_csv = DATA_DIR / "series" / f"{stem}_{name}_rise.csv"
+    write_csv(risen, rise_csv)
+    season = [p.day for p in risen if p.day > base.end and phenology.started(p.values)]
+    typer.echo(
+        f"rise above {base.start}..{base.end} -> {rise_csv}\n"
+        f"season days: {', '.join(map(str, season)) or 'none'}"
+    )
+    return Panel(
+        band=band,
+        ylabel=f"Δ{band} - base level",
+        lines=[Line(phenology.target, label, risen)],
+        zero_line=True,
+        threshold=(ONSET_RISE, "season start"),
+    )
+
+
 def _render_cached(client: ProcessClient, request: RenderRequest) -> bytes:
     """Process API image, cached by request fingerprint (PU are metered)."""
-    cache = DATA_DIR / "process" / f"{request.fingerprint()}.png"
+    name = f"{request.fingerprint()}.{request.image_format.extension}"
+    cache = DATA_DIR / "process" / name
     if cache.exists():
         return cache.read_bytes()
     image = client.render(request)
@@ -338,21 +400,152 @@ def _render_cached(client: ProcessClient, request: RenderRequest) -> bytes:
     return image
 
 
-def _median_psri(
-    client: StatisticsClient, site: Site, forest: ForestType, area: Area, day: date
-) -> float:
-    """Stand-level median PSRI on one day (20 m, clouds and snow masked)."""
+@dataclass(frozen=True, slots=True)
+class _SheetStands:
+    """Stands behind an image sheet: medians over the site, outlines in the crop."""
+
+    target: ForestType
+    control: ForestType
+    target_site: Area
+    control_site: Area
+    target_crop: Area
+
+
+@dataclass(frozen=True, slots=True)
+class _SheetBase:
+    """What every date of a sheet is compared with: the base period's values."""
+
+    period: DayRange
+    pixels: Composite
+    target: dict[str, float]
+    """Stand medians of the target over the base period."""
+    control: dict[str, float]
+    mask: NDArray[np.bool_]
+    """Target stand pixels of the crop."""
+
+
+def _medians(
+    client: StatisticsClient,
+    site: Site,
+    phenology: Phenology,
+    forest: ForestType,
+    area: Area,
+    period: DayRange,
+) -> dict[str, float]:
+    """Each band's stand median, over the visible days of ``period`` (20 m)."""
     request = StatisticsRequest(
-        area=area,
-        period=DayRange.single(day),
-        evalscript=Evalscript.SENESCENCE_STATS.source(),
+        area=area, period=period, evalscript=phenology.statistics.source()
     )
-    found = _daily(client, request, site, forest)
-    value = found[0].bands["PSRI"].percentiles.get(50, math.nan) if found else math.nan
-    if math.isnan(value):
-        msg = f"no visible {forest.label} on {day}: pick another date"
-        raise typer.BadParameter(msg, param_hint="--date")
-    return value
+    points = usable(to_series(_daily(client, request, site, forest)))
+    values = {
+        band: median(p.values[band] for p in points if not math.isnan(p.values[band]))
+        for band in phenology.bands
+        if any(not math.isnan(p.values[band]) for p in points)
+    }
+    if len(values) < len(phenology.bands):
+        msg = f"no visible {forest.label} from {period.start} to {period.end}"
+        raise typer.BadParameter(msg, param_hint="--date or --base")
+    return values
+
+
+def _composite(process: ProcessClient, crop: BBox, period: DayRange) -> Composite:
+    """Per-pixel median indices of a period's clear scenes (``median_indices``)."""
+    request = RenderRequest.at_resolution(
+        bbox=crop,
+        inputs=(DataInput(period=period),),
+        evalscript=Evalscript.MEDIAN_INDICES.source(),
+        image_format=ImageFormat.TIFF,
+    )
+    return Composite.from_tiff(_render_cached(process, request))
+
+
+def _sheet_base(
+    clients: tuple[StatisticsClient, ProcessClient],
+    site: Site,
+    stands: _SheetStands,
+    crop: BBox,
+    period: DayRange,
+) -> _SheetBase:
+    """Fetch the base period once for the whole sheet."""
+    stats, process = clients
+    phenology = _phenology(site)
+    pixels = _composite(process, crop, period)
+    return _SheetBase(
+        period=period,
+        pixels=pixels,
+        target=_medians(
+            stats, site, phenology, stands.target, stands.target_site, period
+        ),
+        control=_medians(
+            stats, site, phenology, stands.control, stands.control_site, period
+        ),
+        mask=stand_mask(stands.target_crop, crop, *pixels.clear.shape),
+    )
+
+
+def _frame(  # one date needs the whole sheet's context
+    clients: tuple[StatisticsClient, ProcessClient],
+    site: Site,
+    stands: _SheetStands,
+    crop: BBox,
+    base: _SheetBase,
+    day: date,
+    stage: str,
+) -> Frame:
+    """Render one date: true colour and per-pixel change since the base."""
+    stats, process = clients
+    phenology = _phenology(site)
+    on_day = DayRange.single(day)
+    control = _medians(
+        stats, site, phenology, stands.control, stands.control_site, on_day
+    )
+    target = _medians(stats, site, phenology, stands.target, stands.target_site, on_day)
+    shift = {Index(band): control[band] - base.control[band] for band in control}
+    band = phenology.delta_band
+    stand = target[band] - base.target[band] - shift[Index(band)]
+    change = Change.between(base.pixels, _composite(process, crop, on_day))
+    level = phenology.rule.levels(change, shift)
+    seen = detected_shares(change, level, base.mask)
+    true_color = RenderRequest.at_resolution(
+        bbox=crop,
+        inputs=(DataInput(period=on_day),),
+        evalscript=Evalscript.TRUE_COLOR.source(),
+    )
+    image = read_png(_render_cached(process, true_color))
+    caption = (
+        f"Δ{band} {stand:+.3f} · {seen.visible:.0%} visible"
+        f" · {seen.detected:.0%} détecté"
+    ).replace("%", " %")
+    match phenology:
+        case Phenology.LARCH:
+            layer = overlay(change, level, LARCH_LEGEND, within=base.mask)
+        case Phenology.MIMOSA:
+            layer = overlay(change, level, MIMOSA_LEGEND)
+        case _:
+            assert_never(phenology)
+    return Frame(day, stage, caption, image, layer)
+
+
+def _sheet_title(site: Site, control: ForestType, base: DayRange) -> str:
+    """French title: what the detection row measures and its thresholds."""
+    phenology = _phenology(site)
+    rule = phenology.rule
+    match phenology:
+        case Phenology.LARCH:
+            index = "du PSRI"
+            extra = ""
+        case Phenology.MIMOSA:
+            index = "du rapport rouge/vert"
+            drop = -(rule.ndvi_drop or 0.0)
+            extra = f" et si le NDVI baisse d'au moins {drop:.2f} de plus que le témoin"
+        case _:
+            assert_never(phenology)
+    return (
+        f"{site.value} : Δ{rule.signal} = hausse {index} du pixel depuis la base "
+        f"({french_date(base.start)} - {french_date(base.end)}) moins celle du "
+        f"témoin ({control.french}) ; détecté si Δ{rule.signal} ≥ "
+        f"{rule.bins[0]:+.2f}{extra} (moyenne sur {SMOOTHING * 10} m)"
+    )
 
 
 @app.command()
@@ -366,15 +559,25 @@ def frames(
         str | None, typer.Option(help="Crop west,south,east,north (default: site).")
     ] = None,
     control: Annotated[
-        ForestType, typer.Option(help="Evergreen control stand type.")
-    ] = ForestType.MOUNTAIN_PINE,
+        ForestType | None,
+        typer.Option(help="Evergreen control stand type (default: the site's)."),
+    ] = None,
+    base: Annotated[
+        str | None,
+        typer.Option(
+            help="Base period FROM..TO (default: 1 Aug-20 Sep for larch, "
+            "1 Nov-10 Jan for mimosa)."
+        ),
+    ] = None,
     out: Annotated[Path | None, typer.Option("--out", "-o", help="Output PNG.")] = None,
 ) -> None:
-    """Image sheet: true colour and per-pixel larch detection, one column a date.
+    """Image sheet: true colour and per-pixel detection, one column a date.
 
-    The control median comes from the whole site, as in ``series``; the images
-    cover ``--window``. Needs CDSE_CLIENT_ID and CDSE_CLIENT_SECRET.
+    Each pixel's change since the base period, minus the control stands' median
+    change (over the whole site, as in ``series``); the images cover
+    ``--window``. Needs CDSE_CLIENT_ID and CDSE_CLIENT_SECRET.
     """
+    phenology = _phenology(site)
     try:
         crop = BBox.parse(window) if window else site.bbox
         stages = [
@@ -383,49 +586,37 @@ def frames(
         ]
     except ValueError as err:
         raise typer.BadParameter(str(err)) from err
+    first, last = stages[0][0], stages[-1][0]
+    period = _parse_period(base) if base else phenology.base(first)
     found = _stands(site, refresh=False)
-    larch_site = _area(found, ForestType.LARCH, site.bbox)
-    control_site = _area(found, control, site.bbox)
-    larch_crop = _area(found, ForestType.LARCH, crop)
-    sheet: list[Frame] = []
+    chosen = control or phenology.control
+    stands = _SheetStands(
+        target=phenology.target,
+        control=chosen,
+        target_site=_area(found, phenology.target, site.bbox),
+        control_site=_area(found, chosen, site.bbox),
+        target_crop=_area(found, phenology.target, crop),
+    )
     auth = ClientCredentialsAuth(CdseSettings())
     with httpx.Client(auth=auth, timeout=HTTP_TIMEOUT) as http:
-        stats, process = StatisticsClient(http), ProcessClient(http)
-        for day, stage in stages:
-            reference = _median_psri(stats, site, control, control_site, day)
-            larch = _median_psri(stats, site, ForestType.LARCH, larch_site, day)
-            inputs = (DataInput(period=DayRange.single(day)),)
-            true_color = RenderRequest.at_resolution(
-                bbox=crop, inputs=inputs, evalscript=Evalscript.TRUE_COLOR.source()
-            )
-            detection = dataclasses.replace(
-                RenderRequest.at_resolution(
-                    bbox=crop,
-                    inputs=inputs,
-                    evalscript=Evalscript.LARCH_DELTA.source(CONTROL_PSRI=reference),
-                ),
-                geometry=larch_crop.geojson,
-            )
-            image = read_png(_render_cached(process, true_color))
-            overlay = read_png(_render_cached(process, detection))
-            mask = stand_mask(larch_crop, crop, *overlay.shape[:2])
-            seen = shares(overlay, mask)
-            caption = (
-                f"ΔPSRI {larch - reference:+.3f} · {seen.visible:.0%} visible"
-                f" · {seen.detected:.0%} détecté"
-            ).replace("%", " %")
-            sheet.append(Frame(day, stage, caption, image, overlay))
-            typer.echo(f"{day} {stage}: {caption}")
-    first, last = stages[0][0], stages[-1][0]
+        clients = (StatisticsClient(http), ProcessClient(http))
+        reference = _sheet_base(clients, site, stands, crop, period)
+        sheet = [
+            _frame(clients, site, stands, crop, reference, day, stage)
+            for day, stage in stages
+        ]
+    match phenology:
+        case Phenology.LARCH:
+            legend = LARCH_LEGEND
+        case Phenology.MIMOSA:
+            legend = MIMOSA_LEGEND
+        case _:
+            assert_never(phenology)
+    for frame in sheet:
+        typer.echo(f"{frame.day} {frame.stage}: {frame.caption}")
     target = out or DATA_DIR / "frames" / f"{site.value}_{first}_{last}.png"
-    plot_sheet(
-        sheet,
-        crop,
-        larch_crop,
-        f"{site.value} : mélèzes BD Forêt, ΔPSRI = PSRI du pixel - médiane du "
-        f"témoin ({control.french}) le même jour",
-        target,
-    )
+    title = _sheet_title(site, chosen, period)
+    plot_sheet(Sheet(sheet, crop, stands.target_crop, title, legend), target)
     typer.echo(f"sheet -> {target}")
 
 

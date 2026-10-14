@@ -1,6 +1,7 @@
 from datetime import date
 
 from copernicus.bdforet import ForestType
+from copernicus.chart import COLORS
 from copernicus.chart import Line
 from copernicus.chart import Panel
 from copernicus.chart import plot_panels
@@ -26,7 +27,13 @@ class TestPlotSeries:
         ]
         panels = [
             Panel("NDVI", "NDVI", lines),
-            Panel("PSRI", "ΔPSRI", lines[:1], zero_line=True),
+            Panel("PSRI", "ΔPSRI", lines[:1], zero_line=True, threshold=(0.04, "x")),
         ]
         plot_panels(panels, "t", out)
         assert out.read_bytes().startswith(PNG_MAGIC)
+
+
+class TestColors:
+    def test_every_forest_type_has_its_own_colour(self):
+        assert set(COLORS) == set(ForestType)
+        assert len(set(COLORS.values())) == len(COLORS)

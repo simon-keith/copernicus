@@ -36,6 +36,9 @@ COLORS: Final[Mapping[ForestType, str]] = {
     ForestType.LARCH: "#eb6834",
     ForestType.SCOTS_PINE: "#1baf7a",
     ForestType.FIR_SPRUCE: "#6250d6",
+    ForestType.OTHER_BROADLEAF: "#eda100",
+    ForestType.EVERGREEN_OAK: "#008300",
+    ForestType.MIXED_BROADLEAF: "#e87ba4",
 }
 """Validated categorical slots (reference palette), fixed per forest type."""
 
@@ -57,6 +60,8 @@ class Panel:
     ylabel: str
     lines: Sequence[Line]
     zero_line: bool = False
+    threshold: tuple[float, str] | None = None
+    """A dashed level and its label, e.g. the start of the season."""
 
 
 def plot_panels(
@@ -96,6 +101,18 @@ def plot_panels(
             ends.append((days[-1], values[-1], line.label))
         if panel.zero_line:
             ax.axhline(0, color=TEXT_SECONDARY, linewidth=0.8, zorder=1)
+        if panel.threshold is not None:
+            level, note = panel.threshold
+            ax.axhline(level, color=TEXT_SECONDARY, linewidth=0.8, linestyle="--")
+            ax.annotate(
+                note,
+                (0.0, level),
+                xycoords=("axes fraction", "data"),
+                xytext=(4, 3),
+                textcoords="offset points",
+                fontsize=8,
+                color=TEXT_SECONDARY,
+            )
         if observed is not None:
             period, _ = observed
             ax.axvspan(

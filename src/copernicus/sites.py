@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Final
 
 from copernicus.geo import BBox
+from copernicus.phenology import Phenology
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +21,8 @@ class SiteInfo:
 
     bbox: BBox
     description: str
+    phenology: Phenology | None = None
+    """Seasonal change followed through BD Forêt stands (None for fires)."""
 
 
 class Site(StrEnum):
@@ -57,38 +60,47 @@ SITES: Final[Mapping[Site, SiteInfo]] = {
     Site.TANNERON: SiteInfo(
         BBox(west=6.79, south=43.52, east=6.96, north=43.62),
         "Mimosa: Tanneron massif, Mandelieu, Pégomas (mask Saint-Cassien).",
+        Phenology.MIMOSA,
     ),
     Site.CORNICHE_DOR: SiteInfo(
         BBox(west=6.84, south=43.42, east=6.96, north=43.53),
         "Mimosa: Esterel coast, Théoule to Agay.",
+        Phenology.MIMOSA,
     ),
     Site.BORMES: SiteInfo(
         BBox(west=6.27, south=43.09, east=6.45, north=43.23),
         "Mimosa: Bormes-les-Mimosas commune (burned 26 Jul 2017).",
+        Phenology.MIMOSA,
     ),
     Site.CAP_LARDIER: SiteInfo(
         BBox(west=6.60, south=43.15, east=6.65, north=43.19),
         "Mimosa validation: Port-Cros NP acacia cover map (Lacosse 2021).",
+        Phenology.MIMOSA,
     ),
     Site.QUEYRAS: SiteInfo(
         BBox(west=6.82, south=44.74, east=6.98, north=44.83),
         "Larch: Guil valley, Aiguilles to Abriès, Forêt de Marassan.",
+        Phenology.LARCH,
     ),
     Site.ECRINS: SiteInfo(
         BBox(west=6.38, south=44.78, east=6.56, north=44.90),
         "Larch: Vallouise and Puy-Saint-Vincent.",
+        Phenology.LARCH,
     ),
     Site.RISOUL: SiteInfo(
         BBox(west=6.595, south=44.579, east=6.654, north=44.661),
         "Larch: Risoul commune (owner saw orange larches 24-26 Oct 2025).",
+        Phenology.LARCH,
     ),
     Site.CEILLAC: SiteInfo(
         BBox(west=6.707, south=44.601, east=6.908, north=44.707),
         "Larch: Ceillac commune (owner saw orange larches 24-26 Oct 2025).",
+        Phenology.LARCH,
     ),
     Site.SAINT_VERAN: SiteInfo(
         BBox(west=6.822, south=44.652, east=6.963, north=44.716),
         "Larch: Saint-Véran commune (owner saw orange larches 24-26 Oct 2025).",
+        Phenology.LARCH,
     ),
     Site.AUDE_2025: SiteInfo(
         BBox(west=2.60, south=42.96, east=2.93, north=43.13),

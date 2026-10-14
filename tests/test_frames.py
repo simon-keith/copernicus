@@ -3,15 +3,19 @@ from datetime import date
 import numpy as np
 import pytest
 
-from copernicus.evalscripts import Evalscript
-from copernicus.frames import DELTA_BINS
 from copernicus.frames import HIDDEN_GREY
+from copernicus.frames import LARCH_LEGEND
+from copernicus.frames import MIMOSA_LEGEND
 from copernicus.frames import Frame
+from copernicus.frames import Sheet
+from copernicus.frames import overlay
 from copernicus.frames import plot_sheet
-from copernicus.frames import shares
 from copernicus.frames import stand_mask
 from copernicus.geo import BBox
 from copernicus.geometry import Area
+from copernicus.pixels import Change
+from copernicus.pixels import Index
+from copernicus.pixels import PixelStatus
 
 BBOX = BBox(west=6.0, south=44.0, east=6.4, north=44.4)
 # Left half of the box.
@@ -28,11 +32,9 @@ LEFT = Area(
 )
 
 
-def overlay(height: int, width: int) -> np.ndarray:
-    image = np.zeros((height, width, 4), dtype=np.float32)
-    image[0, 0] = [HIDDEN_GREY, HIDDEN_GREY, HIDDEN_GREY, 0.9]  # masked
-    image[1, 0] = [0.92, 0.41, 0.2, 0.92]  # detected
-    return image
+def measured(status: np.ndarray) -> Change:
+    zeros = np.zeros(status.shape, dtype=np.float32)
+    return Change(values=dict.fromkeys(Index, zeros), status=status)
 
 
 class TestStandMask:
@@ -42,24 +44,37 @@ class TestStandMask:
         assert not mask[:, 2:].any()
 
 
-class TestShares:
-    def test_hidden_pixels_are_not_counted_as_unchanged(self):
-        result = shares(overlay(4, 4), stand_mask(LEFT, BBOX, 4, 4))
-        assert result.visible == pytest.approx(7 / 8)
-        assert result.detected == pytest.approx(1 / 7)
+class TestOverlay:
+    def test_paints_hidden_grey_and_detections_by_class(self):
+        status = np.full((4, 4), PixelStatus.MEASURED, dtype=np.uint8)
+        status[0, 0] = PixelStatus.HIDDEN
+        level = np.full((4, 4), -1, dtype=np.int8)
+        level[1, 1] = len(MIMOSA_LEGEND.colors) - 1
+        image = overlay(measured(status), level, MIMOSA_LEGEND)
+        assert image[0, 0, :3] == pytest.approx([HIDDEN_GREY] * 3)
+        assert image[1, 1, 3] > 0
+        assert image[2, 2, 3] == 0
+
+    def test_can_be_limited_to_the_stands(self):
+        status = np.full((4, 4), PixelStatus.HIDDEN, dtype=np.uint8)
+        level = np.zeros((4, 4), dtype=np.int8)
+        within = stand_mask(LEFT, BBOX, 4, 4)
+        image = overlay(measured(status), level, LARCH_LEGEND, within=within)
+        assert (image[:, 2:, 3] == 0).all()
+        assert (image[:, :2, 3] > 0).all()
 
 
-class TestBins:
-    def test_python_legend_matches_the_evalscript(self):
-        source = Evalscript.LARCH_DELTA.source(CONTROL_PSRI=0.0)
-        bins = ", ".join(f"{b:.2f}" for b in DELTA_BINS)
-        assert f"var BINS = [{bins}];" in source
+class TestLegends:
+    @pytest.mark.parametrize("legend", [LARCH_LEGEND, MIMOSA_LEGEND])
+    def test_one_colour_per_class(self, legend):
+        assert len(legend.colors) == len(legend.bins)
 
 
 class TestPlotSheet:
     def test_writes_a_png(self, tmp_path):
         image = np.ones((4, 4, 4), dtype=np.float32)
-        frame = Frame(date(2025, 10, 15), "début", "ΔPSRI +0.065", image, overlay(4, 4))
+        layer = np.zeros((4, 4, 4), dtype=np.float32)
+        frame = Frame(date(2025, 10, 15), "début", "ΔPSRI +0.065", image, layer)
         out = tmp_path / "sheet.png"
-        plot_sheet([frame, frame], BBOX, LEFT, "t", out)
+        plot_sheet(Sheet([frame, frame], BBOX, LEFT, "t", LARCH_LEGEND), out)
         assert out.read_bytes().startswith(b"\x89PNG")

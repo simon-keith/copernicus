@@ -53,3 +53,24 @@ class TestRender:
         result = runner.invoke(app, args, env={"COLUMNS": "200"})
         assert result.exit_code == 2
         assert hint in result.output
+
+
+class TestStandCommands:
+    # Both fail on arguments, before any credential or network access.
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["series", "aude_2025", "-p", "2025-08-01..2025-09-01"],
+            ["frames", "aude_2025", "-d", "2025-08-20=après"],
+        ],
+    )
+    def test_fire_sites_have_no_stand_signal(self, args):
+        result = runner.invoke(app, args, env={"COLUMNS": "200"})
+        assert result.exit_code == 2
+        assert "no stand-level signal" in result.output
+
+    def test_rejects_a_bad_base_period(self):
+        args = ["frames", "ceillac", "-d", "2025-10-15=début", "--base", "2025-13-01"]
+        result = runner.invoke(app, args, env={"COLUMNS": "200"})
+        assert result.exit_code == 2
+        assert "month must be in 1..12" in result.output

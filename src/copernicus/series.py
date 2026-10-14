@@ -6,8 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from statistics import median
 from typing import Final
 
+from copernicus.geo import DayRange
 from copernicus.statistics import DayStats
 
 MEDIAN: Final = 50
@@ -90,6 +92,43 @@ def difference(
             )
         )
     return result
+
+
+def rise(points: Sequence[SeriesPoint], base: DayRange) -> list[SeriesPoint] | None:
+    """Each band minus its median over the ``base`` days, or None without one.
+
+    The target-minus-control difference has a level of its own outside the
+    season, which moves from year to year: the season is the rise above it.
+
+    Examples
+    --------
+    >>> base = DayRange(start=date(2025, 8, 1), end=date(2025, 9, 20))
+    >>> points = [
+    ...     SeriesPoint(day=date(2025, 8, 5), coverage=1.0, values={"PSRI": -0.02}),
+    ...     SeriesPoint(day=date(2025, 10, 15), coverage=0.7, values={"PSRI": 0.06}),
+    ... ]
+    >>> [round(p.values["PSRI"], 2) for p in rise(points, base)]
+    [0.0, 0.08]
+    """
+    inside = [p for p in points if base.start <= p.day <= base.end]
+    if not inside:
+        return None
+    level = {
+        band: _median([p.values[band] for p in inside]) for band in inside[0].values
+    }
+    return [
+        SeriesPoint(
+            day=point.day,
+            coverage=point.coverage,
+            values={band: value - level[band] for band, value in point.values.items()},
+        )
+        for point in points
+    ]
+
+
+def _median(values: Sequence[float]) -> float:
+    kept = [value for value in values if not math.isnan(value)]
+    return median(kept) if kept else math.nan
 
 
 def write_csv(points: Sequence[SeriesPoint], path: Path) -> None:
